@@ -62,6 +62,45 @@ export const byCode = query({
   },
 });
 
+/** The console's own still-open room, so a page reload keeps the pairing. */
+export const activeForOwner = query({
+  args: { ownerId: v.string() },
+  handler: async (ctx, { ownerId }) => {
+    const open = await ctx.db
+      .query("rooms")
+      .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+      .filter((q) => q.neq(q.field("status"), "closed"))
+      .collect();
+    open.sort((a, b) => b.createdAt - a.createdAt);
+    return open[0] ?? null;
+  },
+});
+
+/** After a reload the console takes its room back with a fresh host session,
+ *  wiping the previous peer handshake while keeping the paired controller. */
+export const reclaim = mutation({
+  args: { code: v.string(), ownerId: v.string(), hostId: v.string() },
+  handler: async (ctx, { code, ownerId, hostId }) => {
+    const { doc } = await normalize(ctx, code);
+    if (!doc) throw new Error("No room with that code");
+    if (doc.status === "closed") throw new Error("That room is closed");
+    if (doc.ownerId !== ownerId) {
+      throw new Error("That room belongs to another console");
+    }
+    await ctx.db.patch(doc._id, {
+      hostId,
+      hostSDP: undefined,
+      hostCandidates: undefined,
+      controllerSDP: undefined,
+      controllerCandidates: undefined,
+      transport: undefined,
+      lastInput: undefined,
+      heartbeat: undefined,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
 /** The controller claims the room with the shared code. */
 export const join = mutation({
   args: {
@@ -73,6 +112,13 @@ export const join = mutation({
     const { doc } = await normalize(ctx, code);
     if (!doc) throw new Error("No room with that code");
     if (doc.status === "closed") throw new Error("That room is closed");
+    // Only one phone drives the pad — unless the current one went quiet.
+    if (doc.controllerId && doc.controllerId !== controllerId) {
+      const lastActivity = Math.max(doc.heartbeat?.at ?? 0, doc.updatedAt);
+      if (Date.now() - lastActivity < 15_000) {
+        throw new Error("That room already has a controller");
+      }
+    }
     await ctx.db.patch(doc._id, {
       controllerId,
       controllerLabel,

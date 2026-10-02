@@ -85,10 +85,13 @@ export default function Dashboard() {
   const [copied, setCopied] = useState(false);
   const [keymap, setKeymap] = useState<Keymap>(() => loadKeymap());
   const [monitor, setMonitor] = useState<InputFrame>(() => emptyFrame());
+  const [linkEpoch, setLinkEpoch] = useState(0);
 
   const creatingRef = useRef(false);
   const linkRef = useRef<HostLink | null>(null);
   const seenCandidatesRef = useRef(new Set<string>());
+  const remoteSdpRef = useRef<string | null>(null);
+  const skipReuseRef = useRef(false);
   const lastSeqRef = useRef(-1);
   const frameRef = useRef<InputFrame>(emptyFrame());
   const keysRef = useRef<Set<string>>(new Set());
@@ -98,10 +101,15 @@ export default function Dashboard() {
 
   const createRoom = useMutation(api.rooms.create);
   const closeRoom = useMutation(api.rooms.close);
+  const reclaimRoom = useMutation(api.rooms.reclaim);
   const setHostSdp = useMutation(api.rooms.setHostSdp);
   const addHostCandidate = useMutation(api.rooms.addHostCandidate);
 
   const room = useQuery(api.rooms.byCode, code ? { code } : "skip");
+  const existingRoom = useQuery(
+    api.rooms.activeForOwner,
+    user ? { ownerId: user._id } : "skip",
+  );
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -110,19 +118,46 @@ export default function Dashboard() {
   }, []);
 
   /* ── allocate a room ────────────────────────────────────── */
+  const bootstrapRoom = useCallback(
+    async (allowReuse: boolean) => {
+      if (!user) {
+        creatingRef.current = false;
+        return;
+      }
+      if (allowReuse && existingRoom) {
+        try {
+          await reclaimRoom({
+            code: existingRoom.code,
+            ownerId: user._id,
+            hostId,
+          });
+          setCode(existingRoom.code);
+          creatingRef.current = false;
+          return;
+        } catch (error) {
+          console.error("room reclaim failed, opening a fresh room", error);
+        }
+      }
+      try {
+        const next = await createRoom({ hostId, ownerId: user._id });
+        setCode(next);
+      } catch (error) {
+        console.error("room create failed", error);
+      } finally {
+        creatingRef.current = false;
+      }
+    },
+    [user, existingRoom, reclaimRoom, createRoom, hostId],
+  );
+
   useEffect(() => {
     if (isLoading || !user || code || creatingRef.current) return;
+    if (existingRoom === undefined) return;
+    const allowReuse = !skipReuseRef.current;
+    skipReuseRef.current = false;
     creatingRef.current = true;
-    createRoom({ hostId, ownerId: user._id })
-      .then((id) => {
-        creatingRef.current = false;
-        setCode(id);
-      })
-      .catch((error) => {
-        console.error("room create failed", error);
-        creatingRef.current = false;
-      });
-  }, [isLoading, user, code, hostId, createRoom]);
+    void bootstrapRoom(allowReuse);
+  }, [isLoading, user, code, hostId, existingRoom, bootstrapRoom]);
 
   /* ── apply incoming frames ──────────────────────────────── */
   const applyFrame = useCallback((frame: InputFrame) => {
@@ -150,7 +185,7 @@ export default function Dashboard() {
       onFrame: applyFrame,
       onControl: (message) => {
         if (message.k === "p" && typeof message.t === "number") {
-          link.send({ k: "p", r: message.t });
+          link.pong(message.t);
         }
       },
       onOpen: () => setChannelOpen(true),
@@ -165,13 +200,26 @@ export default function Dashboard() {
       releaseAllKeys(keysRef.current);
       keysRef.current = new Set();
     };
-  }, [code, applyFrame, setHostSdp, addHostCandidate]);
+  }, [code, applyFrame, setHostSdp, addHostCandidate, linkEpoch]);
+
+  /* A new code means a new handshake — forget the previous remote SDP. */
+  useEffect(() => {
+    remoteSdpRef.current = null;
+  }, [code]);
 
   const controllerSdp = room?.controllerSDP;
   useEffect(() => {
-    if (!controllerSdp) return;
-    void linkRef.current?.acceptRemoteSdp(controllerSdp);
-  }, [controllerSdp]);
+    if (!controllerSdp || controllerSdp === remoteSdpRef.current) return;
+    const link = linkRef.current;
+    if (!link) return;
+    remoteSdpRef.current = controllerSdp;
+    if (link.appliedRemote) {
+      // The phone restarted its peer link — offer again from scratch.
+      setLinkEpoch((value) => value + 1);
+      return;
+    }
+    void link.acceptRemoteSdp(controllerSdp);
+  }, [controllerSdp, linkEpoch]);
 
   const candidates = room?.controllerCandidates;
   useEffect(() => {
@@ -183,7 +231,7 @@ export default function Dashboard() {
       seenCandidatesRef.current.add(candidate);
       link.addRemoteCandidate(candidate);
     }
-  }, [candidates]);
+  }, [candidates, linkEpoch]);
 
   const relayFrame = room?.lastInput;
   useEffect(() => {
@@ -230,6 +278,7 @@ export default function Dashboard() {
 
   const handleNewCode = useCallback(async () => {
     const previous = code;
+    skipReuseRef.current = true;
     setCode(null);
     if (previous) void closeRoom({ code: previous }).catch(() => undefined);
   }, [code, closeRoom]);
@@ -257,7 +306,8 @@ export default function Dashboard() {
       : "";
 
   const connected = Boolean(room?.controllerId);
-  const live = connected && !stale;
+  const linked = channelOpen || room?.transport === "relay";
+  const live = connected && linked && !stale;
   const transport = channelOpen
     ? "Peer-to-peer"
     : room?.transport === "relay"
@@ -313,7 +363,13 @@ export default function Dashboard() {
             <div className="flex items-center gap-2">
               <StatusDot tone={live ? "on" : "wait"} />
               <span className="micro text-muted-foreground">
-                {live ? "Controller live" : connected ? "Handshaking" : "Waiting"}
+                {live
+                  ? "Controller live"
+                  : stale
+                    ? "Controller idle"
+                    : connected
+                      ? "Handshaking"
+                      : "Waiting"}
               </span>
               <Button
                 type="button"

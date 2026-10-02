@@ -58,6 +58,7 @@ class PeerBase {
       }
     };
     this.pc.onconnectionstatechange = () => {
+      if (this.disposed) return;
       const state = this.pc.connectionState;
       if (state === "failed" || state === "closed") this.handlers.onClose?.();
     };
@@ -73,6 +74,12 @@ class PeerBase {
     } finally {
       this.settingRemote = false;
     }
+  }
+
+  /** True once a remote description has been applied — lets callers tell a
+   *  fresh negotiation apart from a duplicate. */
+  get appliedRemote() {
+    return this.remoteDescSet;
   }
 
   addRemoteCandidate(json: string) {
@@ -177,6 +184,11 @@ export class HostLink extends PeerBase {
 
   sendFrame(frame: InputFrame) {
     return this.send({ k: "i", f: frame }, this.channel);
+  }
+
+  /** Answer a controller ping so it can measure the round trip. */
+  pong(replyTo: number) {
+    return this.send({ k: "p", r: replyTo }, this.channel);
   }
 }
 

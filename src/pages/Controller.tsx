@@ -56,6 +56,20 @@ function deviceLabel() {
   return `${form} · ${os}`;
 }
 
+/** Stable per-tab id, so a page reload keeps the room it already claimed. */
+function loadPadId() {
+  try {
+    const key = "nullpad.padId.v1";
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const id = `pad-${Math.random().toString(36).slice(2, 10)}`;
+    sessionStorage.setItem(key, id);
+    return id;
+  } catch {
+    return `pad-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
 /* ── Join screen ──────────────────────────────────────────── */
 
 function Join({
@@ -150,12 +164,11 @@ export default function Controller() {
   const [mode, setMode] = useState<Mode>("connecting");
   const [latency, setLatency] = useState<number | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [linkEpoch, setLinkEpoch] = useState(0);
   const code = normalizeCode(searchParams.get("room") ?? "");
   const activeCode = code.length === 4 ? code : null;
 
-  const controllerIdRef = useRef(
-    `pad-${Math.random().toString(36).slice(2, 10)}`,
-  );
+  const controllerIdRef = useRef(loadPadId());
   const labelRef = useRef(deviceLabel());
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -176,8 +189,11 @@ export default function Controller() {
     }) => Promise<unknown>) | null
   >(null);
   const rttRef = useRef<number | null>(null);
+  const lastPongRef = useRef<number | null>(null);
   const joinedRef = useRef<string | null>(null);
   const baselineRef = useRef<number | null>(null);
+  const seenRef = useRef(new Set<string>());
+  const remoteSdpRef = useRef<string | null>(null);
 
   const inputRef = useRef({
     held: new Set<ButtonId>(),
@@ -281,6 +297,7 @@ export default function Controller() {
     if (!activeCode || !claimed) return;
     const controllerId = controllerIdRef.current;
     setModeBoth("connecting");
+    seenRef.current.clear();
 
     const link = new ControllerLink({
       onLocalSdp: (sdp) => {
@@ -294,10 +311,12 @@ export default function Controller() {
         if (message.k === "p" && typeof message.r === "number") {
           const rtt = Date.now() - message.r;
           rttRef.current = rtt;
+          lastPongRef.current = Date.now();
           setLatency(rtt);
         }
       },
       onOpen: () => {
+        lastPongRef.current = Date.now();
         setModeBoth("rtc");
         transportRef.current?.({
           code: activeCode,
@@ -305,7 +324,9 @@ export default function Controller() {
         });
       },
       onClose: () => {
-        if (modeRef.current === "rtc") setModeBoth("connecting");
+        if (modeRef.current !== "rtc") return;
+        setModeBoth("relay");
+        transportRef.current?.({ code: activeCode, transport: "relay" });
       },
     });
     linkRef.current = link;
@@ -321,20 +342,27 @@ export default function Controller() {
       link.close();
       linkRef.current = null;
     };
-  }, [activeCode, claimed, setControllerSdp, addControllerCandidate, setModeBoth]);  const seenRef = useRef(new Set<string>());
+  }, [activeCode, claimed, setControllerSdp, addControllerCandidate, setModeBoth, linkEpoch]);
+
+  /** Take a fresh offer from the console — rebuilding our link when the
+   *  console restarted its side of the handshake. */
   useEffect(() => {
     if (!claimed || !room) return;
-    if (room.hostSDP) {
-      void linkRef.current?.acceptRemoteSdp(room.hostSDP);
-    }
     const link = linkRef.current;
-    if (!link) return;
     for (const candidate of room.hostCandidates ?? []) {
       if (seenRef.current.has(candidate)) continue;
       seenRef.current.add(candidate);
-      link.addRemoteCandidate(candidate);
+      link?.addRemoteCandidate(candidate);
     }
-  }, [claimed, room]);
+    const next = room.hostSDP;
+    if (!next || !link || next === remoteSdpRef.current) return;
+    if (link.appliedRemote) {
+      setLinkEpoch((value) => value + 1);
+      return;
+    }
+    remoteSdpRef.current = next;
+    void link.acceptRemoteSdp(next);
+  }, [claimed, room, linkEpoch]);
 
   /* ── join once the room resolves ────────────────────────── */
   useEffect(() => {
@@ -347,9 +375,14 @@ export default function Controller() {
       code: activeCode,
       controllerId: controllerIdRef.current,
       controllerLabel: labelRef.current,
-    }).catch(() => {
+    }).catch((joinError) => {
       joinedRef.current = null;
-      setError("Could not join that room");
+      const detail = joinError instanceof Error ? joinError.message : "";
+      setError(
+        /already has a controller/.test(detail)
+          ? "That room is already paired with another phone"
+          : "Could not join that room",
+      );
       leave();
     });
   }, [activeCode, room, joinRoom, leave]);
@@ -438,7 +471,7 @@ export default function Controller() {
         return;
       }
 
-      if (currentMode === "relay" && activeCode) {
+      if (currentMode !== "rtc" && activeCode) {
         const signature = frameSignature(frame);
         const changed = signature !== lastSignature;
         const due = time - lastSend;
@@ -477,6 +510,14 @@ export default function Controller() {
     const ping = setInterval(() => {
       if (modeRef.current !== "rtc") return;
       linkRef.current?.sendPing(Date.now());
+      // A channel can die without ever firing its close event. If the
+      // console stops answering, route frames through the relay instead so
+      // the host never sits on a key that will never be released.
+      const lastPong = lastPongRef.current;
+      if (lastPong !== null && Date.now() - lastPong > 3000) {
+        setModeBoth("relay");
+        transportRef.current?.({ code: activeCode, transport: "relay" });
+      }
     }, 1000);
 
     const heart = setInterval(() => {
