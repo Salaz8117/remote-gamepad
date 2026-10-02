@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { heartbeatValidator, inputFrameValidator } from "./schema";
+import { inputFrameValidator } from "./schema";
 
 /** Alphabet without 0/O, 1/I so a code read off one screen to another never trips. */
 const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
