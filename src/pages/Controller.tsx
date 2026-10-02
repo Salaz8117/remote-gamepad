@@ -929,7 +929,3 @@ export default function Controller() {
     </div>
   );
 }
-
-function inputSnapshotUnused() {
-  return null;
-}
