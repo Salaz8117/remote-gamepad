@@ -13,6 +13,7 @@ import "./index.css";
 const Landing = lazy(() => import("./pages/Landing.tsx"));
 const AuthPage = lazy(() => import("./pages/Auth.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
+const Controller = lazy(() => import("./pages/Controller.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
 // Simple loading fallback for route transitions
@@ -127,11 +128,15 @@ createRoot(document.getElementById("root")!).render(
               <Route
                 path="/dashboard"
                 element={
-                  <RequireAuth>
+                  <RequireAuth
+                    title="Sign in to open the console"
+                    description="The console owns your keymap and pairing codes, so it lives behind your account."
+                  >
                     <Dashboard />
                   </RequireAuth>
                 }
               />
+              <Route path="/controller" element={<Controller />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>

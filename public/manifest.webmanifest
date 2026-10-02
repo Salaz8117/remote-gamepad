@@ -1,11 +1,12 @@
 {
-  "name": "freebuff.com application",
-  "short_name": "freebuff.com",
-  "description": "freebuff.com application",
+  "name": "NULLPAD — phone as game controller",
+  "short_name": "NULLPAD",
+  "description": "Turn the phone in your pocket into a precise controller for your computer.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#000000",
+  "orientation": "any",
+  "background_color": "#fafafa",
+  "theme_color": "#0a0a0a",
   "icons": [
     {
       "src": "/logo.svg",
