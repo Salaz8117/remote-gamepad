@@ -7,6 +7,7 @@ import {
 } from "@/components/controller/controls";
 import { Slider } from "@/components/ui/slider";
 import { api } from "@/convex/_generated/api";
+import { triggerHaptic } from "@/lib/haptics";
 import {
   BUTTON_BITS,
   type ButtonId,
@@ -235,19 +236,15 @@ export default function Controller() {
     Object.assign(inputRef.current, patch);
   }, []);
 
-  const haptic = useCallback((duration = 8) => {
+  const haptic = useCallback(() => {
     if (!settingsRef.current.haptics) return;
-    try {
-      navigator.vibrate?.(duration);
-    } catch {
-      /* unsupported */
-    }
+    void triggerHaptic('light');
   }, []);
 
   const press = useCallback(
     (id: ButtonId) => {
       inputRef.current.held.add(id);
-      haptic(8);
+      haptic();
     },
     [haptic],
   );
@@ -750,7 +747,7 @@ export default function Controller() {
               label="L2"
               analog
               onChange={(value) => update({ lt: value })}
-              onDown={() => haptic(6)}
+              onDown={() => { if (settings.haptics) void triggerHaptic('medium'); }}
               onUp={() => undefined}
             />
           </div>
@@ -765,7 +762,7 @@ export default function Controller() {
               label="R2"
               analog
               onChange={(value) => update({ rt: value })}
-              onDown={() => haptic(6)}
+              onDown={() => { if (settings.haptics) void triggerHaptic('medium'); }}
               onUp={() => undefined}
             />
           </div>

@@ -3,10 +3,36 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import { defineConfig } from "vite";
+import { VitePWA } from 'vite-plugin-pwa';
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), vlyPlugin(), tailwindcss()],
+  plugins: [
+    react(), 
+    vlyPlugin(), 
+    tailwindcss(),
+    VitePWA({ 
+      registerType: 'autoUpdate',
+      manifest: {
+        name: 'Joycast Remote Gamepad',
+        short_name: 'Joycast',
+        description: 'The ultimate remote gamepad experience',
+        theme_color: '#ffffff',
+        icons: [
+          {
+            src: 'pwa-192x192.png',
+            sizes: '192x192',
+            type: 'image/png'
+          },
+          {
+            src: 'pwa-512x512.png',
+            sizes: '512x512',
+            type: 'image/png'
+          }
+        ]
+      }
+    })
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -44,8 +70,6 @@ export default defineConfig({
             '@radix-ui/react-popover',
             '@radix-ui/react-progress',
             '@radix-ui/react-radio-group',
-            '@radix-ui/react-scroll-area',
-            '@radix-ui/react-select',
             '@radix-ui/react-separator',
             '@radix-ui/react-slider',
             '@radix-ui/react-switch',
@@ -74,7 +98,7 @@ export default defineConfig({
   },
   // Optimize dependencies
   optimizeDeps: {
-    // Only scan the app entry HTML; avoids crawling unrelated *.html files
+    // Only scan the app entry HTML; avoids crawling other *.html files
     // if a legacy snapshot accidentally contains leaked package folders.
     entries: ['index.html'],
     include: [
